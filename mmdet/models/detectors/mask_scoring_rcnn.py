@@ -1,9 +1,9 @@
 import torch
 
 from mmdet.core import bbox2roi, build_assigner, build_sampler
-from .two_stage import TwoStageDetector
 from .. import builder
 from ..registry import DETECTORS
+from .two_stage import TwoStageDetector
 
 
 @DETECTORS.register_module
@@ -42,10 +42,13 @@ class MaskScoringRCNN(TwoStageDetector):
         self.mask_iou_head = builder.build_head(mask_iou_head)
         self.mask_iou_head.init_weights()
 
+    def forward_dummy(self, img):
+        raise NotImplementedError
+
     # TODO: refactor forward_train in two stage to reduce code redundancy
     def forward_train(self,
                       img,
-                      img_meta,
+                      img_metas,
                       gt_bboxes,
                       gt_labels,
                       gt_bboxes_ignore=None,
@@ -58,7 +61,7 @@ class MaskScoringRCNN(TwoStageDetector):
         # RPN forward and loss
         if self.with_rpn:
             rpn_outs = self.rpn_head(x)
-            rpn_loss_inputs = rpn_outs + (gt_bboxes, img_meta,
+            rpn_loss_inputs = rpn_outs + (gt_bboxes, img_metas,
                                           self.train_cfg.rpn)
             rpn_losses = self.rpn_head.loss(
                 *rpn_loss_inputs, gt_bboxes_ignore=gt_bboxes_ignore)
@@ -66,7 +69,7 @@ class MaskScoringRCNN(TwoStageDetector):
 
             proposal_cfg = self.train_cfg.get('rpn_proposal',
                                               self.test_cfg.rpn)
-            proposal_inputs = rpn_outs + (img_meta, proposal_cfg)
+            proposal_inputs = rpn_outs + (img_metas, proposal_cfg)
             proposal_list = self.rpn_head.get_bboxes(*proposal_inputs)
         else:
             proposal_list = proposals
@@ -149,8 +152,8 @@ class MaskScoringRCNN(TwoStageDetector):
             # mask iou head forward and loss
             pos_mask_pred = mask_pred[range(mask_pred.size(0)), pos_labels]
             mask_iou_pred = self.mask_iou_head(mask_feats, pos_mask_pred)
-            pos_mask_iou_pred = mask_iou_pred[range(mask_iou_pred.size(0)
-                                                    ), pos_labels]
+            pos_mask_iou_pred = mask_iou_pred[range(mask_iou_pred.size(0)),
+                                              pos_labels]
             mask_iou_targets = self.mask_iou_head.get_target(
                 sampling_results, gt_masks, pos_mask_pred, mask_targets,
                 self.train_cfg.rcnn)
@@ -161,13 +164,13 @@ class MaskScoringRCNN(TwoStageDetector):
 
     def simple_test_mask(self,
                          x,
-                         img_meta,
+                         img_metas,
                          det_bboxes,
                          det_labels,
                          rescale=False):
         # image shape of the first image in the batch (only one)
-        ori_shape = img_meta[0]['ori_shape']
-        scale_factor = img_meta[0]['scale_factor']
+        ori_shape = img_metas[0]['ori_shape']
+        scale_factor = img_metas[0]['scale_factor']
 
         if det_bboxes.shape[0] == 0:
             segm_result = [[] for _ in range(self.mask_head.num_classes - 1)]
@@ -190,8 +193,8 @@ class MaskScoringRCNN(TwoStageDetector):
                                                        rescale)
             # get mask scores with mask iou head
             mask_iou_pred = self.mask_iou_head(
-                mask_feats,
-                mask_pred[range(det_labels.size(0)), det_labels + 1])
+                mask_feats, mask_pred[range(det_labels.size(0)),
+                                      det_labels + 1])
             mask_scores = self.mask_iou_head.get_mask_scores(
                 mask_iou_pred, det_bboxes, det_labels)
         return segm_result, mask_scores
